@@ -1,0 +1,1119 @@
+---
+title: "SKELLY_04aug2026running"
+output: html_document
+date: "2026-08-05"
+---
+
+Ok I am going to be trimming this down for publication and organizing in a way that matches exactly what is being asked of me in the manuscript
+
+JULY 16 NOTE: none of this data is normal, so using lm stands to be a bit erroneous. I have done qq plots with log transformed data and it fits a lot better!
+
+Also, for the question of AGE EFFECTS , I am going to remove ceramics and NHL-MgSr from the dataframe. Both of these were only sampled at 6 months, so are incomplete. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loading packages}
+library(tidyverse) #most things pipey
+library(vegan) #pcoa plots
+library(ape) #pcoa function
+library(purrr)
+library(broom)
+library(dplyr) #most things pipey
+library(rstatix) #dunns
+library(lme4)
+library(emmeans)
+#for random forest
+library(caret)
+library(ranger)
+
+```
+
+```{r reading in data}
+setwd("/Users/enixon96/Desktop/DATABASE/2023/CUR23/SKELLY")
+
+skelly <- read.csv("SKELLYlongFormat.csv")%>%
+  mutate(timepoint = case_when(time.point == "1 week" ~ "1w",
+                               time.point == "1 month" ~ "1mo",
+                               time.point == "6 months" ~ "6mo",
+                               TRUE ~ time.point),
+         .keep = "unused")
+
+```
+
+setting up relevant dataframe
+```{r setting up dataframes for age and substrate tests}
+cnatDf <- skelly %>%
+  filter(species == "Cnat") %>%
+  #removing ceramics from analysis because it is not the focus?
+  filter(substrate.type != "Ceramic" & substrate.type != "NHL-MgSr")%>%
+  #removing missing NHL-Mg
+  drop_na()
+  #adding index for uniqueIDs
+
+```
+
+#random forest and PC1 analysis
+
+random forest to identify the metrics that are the most informative for substrate type effects
+```{r random forest - choosing predictor variables for growth metric }
+#ok but area.volume is just a combo of area and volume so not sure if i should keep it
+
+rf_all <- cnatDf%>%
+  #removing the one missing NHL-Mg
+  drop_na()%>%
+  #select scaled variables and useful info only
+  select(substrate.type, volume , area.volume, #timepoint,
+         area,
+         coralliteHeight ,
+         septathickness,
+         diameter)
+
+# Make sure response is a factor
+rf_all$substrate.type <- factor(rf_all$substrate.type)
+
+# Check sample sizes
+table(rf_all$substrate.type)
+
+# Leave-one-out cross validation
+ctrl <- trainControl(
+  method = "LOOCV",
+  classProbs = TRUE
+)
+
+set.seed(123)
+
+#need to remove hyphens
+levels(rf_all$substrate.type) <- make.names(levels(rf_all$substrate.type))
+
+rf_model <- train(
+  substrate.type ~ .,
+  data = rf_all,
+  method = "ranger",
+  trControl = ctrl,
+  importance = "permutation",
+  num.trees = 1000
+)
+
+# Model summary
+rf_model
+
+# Variable importance
+varImp(rf_model)
+
+# Plot variable importance
+plot(varImp(rf_model), main = "Variable Importance")
+
+
+```
+
+PCA using the top 3 metrics of interest
+```{r PCA df set up}
+cnat_pcaDf <- cnatDf%>%
+#making uniqueIDs
+  group_by(substrate.type, timepoint) %>%
+  mutate(replicate = row_number()) %>%
+  ungroup()%>%
+  unite(sampleID, c(substrate.type, timepoint, replicate), sep = "_", remove = FALSE)%>%
+#log transforming all values
+  mutate(across(c(volume, area, area.volume, coralliteHeight, septathickness, diameter),log10,
+                .names = "{.col}_log"))%>%
+#selecting smapleID and log-transf growth variables
+  select(2, 15:20)
+
+```
+
+data viz and PC analysis set up
+```{r PCA top 3 area.volume_log septathickness_log diameter_log}
+
+cnat_PCAdf_top3 <- cnat_pcaDf %>%
+  select(sampleID, area.volume_log, septathickness_log, diameter_log)
+
+cnat_PCA_top3 <- cnat_PCAdf_top3 %>%
+  column_to_rownames(var = "sampleID") %>%
+  #scale() %>%
+  rda(scale = TRUE)
+
+PC_df <- scores(cnat_PCA_top3, display = "sites") %>%
+  as.data.frame() %>%
+  rownames_to_column("sampleID")%>%
+  mutate(PC1 = -PC1)
+
+cnat_PCA_top3Plot <- PC_df %>%
+  separate(sampleID, c("substrate.type", "timepoint", "replicate"), sep = "_")%>%
+  ggplot(aes(x = PC1, y = PC2)) +
+  geom_point(
+    aes(color = substrate.type, shape = timepoint),size = 3)
+
+cnat_PCA_top3Plot
+```
+
+Figure S1
+```{r USE: BIPLOT PCA top 3 area.volume_log, septathickness_log, diameter_log}
+
+#shows loadings to help explain what is driving PC1
+cnat_PCA_top3$CA$v
+
+#additional biplot
+site_scores <- scores(
+  cnat_PCA_top3,
+  display = "sites",
+  scaling = 2
+) %>%
+  as.data.frame() %>%
+  rownames_to_column("sampleID") %>%
+  mutate(PC1 = -PC1) %>%
+  separate(
+    sampleID,
+    c("substrate.type", "timepoint", "replicate"),
+    sep = "_"
+  )
+
+species_scores <- scores(
+  cnat_PCA_top3,
+  display = "species",
+  scaling = 2
+) %>%
+  as.data.frame() %>%
+  rownames_to_column("trait")%>%
+  mutate(PC1 = -PC1)
+
+cnaBiplot <- ggplot(site_scores, aes(PC1, PC2)) +
+
+  geom_point(
+    aes(color = substrate.type,
+        shape = timepoint),
+    size = 3
+  ) +
+
+  geom_segment(
+    data = species_scores,
+    aes(
+      x = 0,
+      y = 0,
+      xend = PC1,
+      yend = PC2
+    ),
+    arrow = arrow(length = unit(0.25, "cm")),
+    inherit.aes = FALSE
+  ) +
+
+  geom_text(
+    data = species_scores,
+    aes(
+      x = PC1,
+      y = PC2,
+      label = trait
+    ),
+    inherit.aes = FALSE,
+    nudge_y = 0.05
+  ) +
+
+  coord_equal()
+
+cnaBiplot
+
+```
+
+linear model of PC1
+
+                                    Df Sum Sq Mean Sq F value   Pr(>F)    
+substrate.type                       3  1.510   0.503   6.575  0.00226 ** 
+as.factor(timepoint)                 2  9.835   4.917  64.227 3.86e-10 ***
+substrate.type:as.factor(timepoint)  6  1.177   0.196   2.561  0.04766 *  
+                
+
+```{r USE LM top 3 growth metrics PCA}
+#ok so i need to take my df from above and break up my sampleID
+cnatDf_PC1_top3 <- PC_df%>%
+  separate(sampleID, c("substrate.type", "timepoint", "replicate"), sep = "_")
+
+LM_cnatDf_PC1_top3 <- aov(PC1 ~ substrate.type * as.factor(timepoint), data = cnatDf_PC1_top3)
+summary(LM_cnatDf_PC1_top3)
+```
+
+TUKEY POST HOC
+
+$contrasts
+timepoint = 1mo:
+ contrast               estimate    SE df t.ratio p.value
+ NHL - (NHL-Mg)           0.4882 0.236 23   2.069  0.1930
+ NHL - (NHL-MgSrQ)       -0.3839 0.236 23  -1.627  0.3838
+ NHL - (NHL-Sr)           0.0275 0.236 23   0.117  0.9994
+ (NHL-Mg) - (NHL-MgSrQ)  -0.8720 0.236 23  -3.696  0.0061
+ (NHL-Mg) - (NHL-Sr)     -0.4606 0.236 23  -1.952  0.2348
+ (NHL-MgSrQ) - (NHL-Sr)   0.4114 0.236 23   1.744  0.3251
+
+timepoint = 1w:
+ contrast               estimate    SE df t.ratio p.value
+ NHL - (NHL-Mg)          -0.3331 0.236 23  -1.412  0.5050
+ NHL - (NHL-MgSrQ)       -0.1545 0.236 23  -0.655  0.9127
+ NHL - (NHL-Sr)           0.1329 0.236 23   0.563  0.9420
+ (NHL-Mg) - (NHL-MgSrQ)   0.1786 0.236 23   0.757  0.8728
+ (NHL-Mg) - (NHL-Sr)      0.4659 0.236 23   1.975  0.2263
+ (NHL-MgSrQ) - (NHL-Sr)   0.2874 0.236 23   1.218  0.6221
+
+timepoint = 6mo:
+ contrast               estimate    SE df t.ratio p.value
+ NHL - (NHL-Mg)           0.0480 0.264 23   0.182  0.9978
+ NHL - (NHL-MgSrQ)       -0.4864 0.236 23  -2.062  0.1954
+ NHL - (NHL-Sr)           0.3672 0.236 23   1.557  0.4219
+ (NHL-Mg) - (NHL-MgSrQ)  -0.5345 0.264 23  -2.026  0.2077
+ (NHL-Mg) - (NHL-Sr)      0.3192 0.264 23   1.210  0.6268
+ (NHL-MgSrQ) - (NHL-Sr)   0.8537 0.236 23   3.618  0.0073
+
+```{r PC1 tukey post hoc}
+#tukey
+emmeans(
+  LM_cnatDf_PC1_top3,
+  pairwise ~ substrate.type | timepoint,
+  adjust = "Tukey"
+)
+
+```
+
+DUNNETS POST HOC 
+
+contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.0677 0.142 23  -0.478  0.9058
+ (NHL-MgSrQ) - NHL   0.3416 0.136 23   2.508  0.0523
+ (NHL-Sr) - NHL     -0.1759 0.136 23  -1.291  0.4448
+
+Results are averaged over the levels of: timepoint 
+P value adjustment: dunnettx method for 3 tests 
+
+```{r PC1 dunnetts posthoc}
+#dunnets AVG ACROSS TIMEPOINTS
+emm_substrate <- emmeans(
+  LM_cnatDf_PC1_top3,
+  ~ substrate.type
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate,
+  method = "dunnett",
+  ref = "NHL"
+)
+
+summary(dunnett_substrate)
+
+
+```
+
+```{r USE line plot 3 growth metrics PCOA}
+
+linePlotDf_PC1_top3 <- cnatDf_PC1_top3%>%
+  mutate(days = case_when(timepoint == "1w" ~ 7,
+                          timepoint == "1mo" ~ 30,
+                          timepoint == "6mo" ~ 180))
+
+linePlot_PC1_top3 <- linePlotDf_PC1_top3%>%
+   ggplot(., aes(x = days, y = PC1)) +
+  geom_point(aes(color = substrate.type), cex = 2)
+  
+linePlot_PC1_top3
+
+
+linePlot_PC1_top3_AVG <- linePlotDf_PC1_top3%>%
+  group_by(substrate.type, timepoint)%>%
+  mutate(meanPC1 = mean(PC1),
+         sd = sd(PC1),
+         n = n(),
+         se = sd/sqrt(n))%>%
+  ungroup()%>%
+   ggplot(., aes(x = days, y = meanPC1)) +
+  geom_point(aes(color = substrate.type), cex = 2)+
+geom_line(aes(color = substrate.type))+
+  geom_errorbar(aes(ymin = meanPC1 - se,ymax = meanPC1 + se,color = substrate.type), width = 0.2)+
+    theme_classic()
+
+linePlot_PC1_top3_AVG
+
+ggsave(
+  filename = "skellyFig.tiff",
+  plot = linePlot_PC1_top3_AVG,
+  width = 7,
+  height = 5,
+  units = "in",
+  dpi = 600,
+  compression = "lzw"
+)
+
+```
+
+#linear models with log transformation
+
+oct26 final note -ultimately i have chosen to log transform the data , which normalizes it pretty well and allows us to run a traditional anova. This I then follow up with a few iteractions of post hocs
+
+post hoc 1 - dunnetts test to look for substrate differences within each timepoint
+
+post hoc 2 - dunnetts test to look for substrate differences avging timepoint
+
+post hoc 3 - tukey test to look for timepoint differences averaging across substrate types
+
+
+I use the stats for the additive model because this is the best test for the question at hand, but I have to use the interactive model to do the dunnetts post hoc sectioned by timepoint. 
+
+After all tests, I run a pval correction for all anova tests (5 tests x 2 factors = 10 tests). post hoc tests do not need to be included in this correction because corrections are made within each post hoc.
+
+#AREA RESULTS
+
+aov:
+
+Response: log(area)
+                          Sum Sq Df F value    Pr(>F)    
+timepoint                25.9835  2 44.7028 1.191e-08 ***
+substrate.type            4.0859  3  4.6863   0.01071 *  
+timepoint:substrate.type  3.3541  6  1.9235   0.11980    
+
+
+```{r area}
+
+#AREA
+
+#checking for normality
+qq <- car::qqPlot(cnatDf$area, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(log(cnatDf$area), ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(cnatDf, aes(x=timepoint, y=area, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+plotSub <- ggplot(cnatDf, aes(x=timepoint, y=area)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1)
+plotSub
+
+#seems like there might be some substrate effects, so lets compare models
+
+cnatArea_add <- aov(log(area) ~ timepoint + substrate.type,
+           data = cnatDf)
+summary(cnatArea_add)
+
+cnatArea_int <- aov(log(area) ~ timepoint * substrate.type,
+           data = cnatDf)
+summary(cnatArea_int)
+```
+
+dunnetts post hoc 1:
+
+timepoint = 1mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL      -1.479 0.440 23  -3.359  0.0076
+ (NHL-MgSrQ) - NHL    0.125 0.440 23   0.284  0.9674
+ (NHL-Sr) - NHL      -0.651 0.440 23  -1.479  0.3431
+
+timepoint = 1w:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL      -0.368 0.440 23  -0.837  0.7215
+ (NHL-MgSrQ) - NHL   -0.637 0.440 23  -1.447  0.3599
+ (NHL-Sr) - NHL      -1.054 0.440 23  -2.394  0.0664
+
+timepoint = 6mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL      -0.269 0.492 23  -0.547  0.8763
+ (NHL-MgSrQ) - NHL    0.167 0.440 23   0.379  0.9412
+ (NHL-Sr) - NHL      -0.517 0.440 23  -1.174  0.5141
+
+Results are given on the log (not the response) scale. 
+P value adjustment: dunnettx method for 3 tests 
+
+dunnetts post hoc 2:
+
+contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL      -0.705 0.265 23  -2.667  0.0372
+ (NHL-MgSrQ) - NHL   -0.115 0.254 23  -0.452  0.9156
+ (NHL-Sr) - NHL      -0.741 0.254 23  -2.914  0.0214
+
+```{r dunnetts }
+#post hoc 1
+
+#dunnets - sectioned by timepoint substrate type
+emm_substrate <- emmeans(
+  cnatArea_int,
+  ~ substrate.type | timepoint 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+
+#posthoc 2
+
+#dunnets - avg by timepoint substrate type
+emm_substrate <- emmeans(
+  cnatArea_int,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+
+tukey (age)
+$contrasts
+ contrast  estimate    SE df t.ratio p.value
+ 1mo - 1w     0.665 0.240 29   2.769  0.0097
+ 1mo - 6mo   -1.431 0.246 29  -5.815 <0.0001
+ 1w - 6mo    -2.096 0.246 29  -8.517 <0.0001
+
+Results are averaged over the levels of: substrate.type 
+Results are given on the log (not the response) scale. 
+P value adjustment: BH method for 3 tests 
+```{r tukey - age diffs}
+#tukey - age diffs
+emmeans(
+  cnatArea_add,
+  pairwise ~ timepoint,
+  adjust = "BH"
+)
+
+```
+
+
+#DIAMETER RESULTS
+
+aov:
+
+Response: log(diameter)
+                          Sum Sq Df F value    Pr(>F)    
+timepoint                0.67732  2  9.5296 0.0009671 ***
+substrate.type           0.82966  3  7.7820 0.0009218 ***
+timepoint:substrate.type 0.27567  6  1.2929 0.2995542    
+Residuals                0.81736 23                      
+
+
+```{r - diam}
+#DIAM
+
+#checking for normality
+qq <- car::qqPlot(cnatDf$diameter, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(log(cnatDf$diameter), ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(cnatDf, aes(x=timepoint, y=diameter, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+plotSub <- ggplot(cnatDf, aes(x=timepoint, y=diameter)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1)
+plotSub
+#seems like there might be some substrate effects, so lets compare models
+
+cnatDiam_add <- aov(log(diameter) ~ timepoint + substrate.type,
+           data = cnatDf)
+summary(cnatDiam_add)
+
+cnatDiam_int <- aov(log(diameter) ~ timepoint * substrate.type,
+           data = cnatDf)
+summary(cnatDiam_int)
+```
+
+post hoc 1:
+timepoint = 1mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.2396 0.154 23  -1.557  0.3058
+ (NHL-MgSrQ) - NHL   0.2054 0.154 23   1.335  0.4202
+ (NHL-Sr) - NHL     -0.0707 0.154 23  -0.460  0.9128
+
+timepoint = 1w:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL      0.0128 0.154 23   0.083  0.9974
+ (NHL-MgSrQ) - NHL   0.0951 0.154 23   0.618  0.8426
+ (NHL-Sr) - NHL     -0.2164 0.154 23  -1.406  0.3813
+
+timepoint = 6mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.1705 0.172 23  -0.991  0.6273
+ (NHL-MgSrQ) - NHL   0.2170 0.154 23   1.410  0.3792
+ (NHL-Sr) - NHL     -0.4170 0.154 23  -2.709  0.0339
+ 
+ posthoc 2:
+ contrast          estimate     SE df t.ratio p.value
+ (NHL-Mg) - NHL      -0.132 0.0925 23  -1.432  0.3675
+ (NHL-MgSrQ) - NHL    0.173 0.0889 23   1.941  0.1605
+ (NHL-Sr) - NHL      -0.235 0.0889 23  -2.641  0.0393
+```{r - dunnetts}
+
+#dunnetts - sectioned by timepoint
+
+emm_substrate <- emmeans(
+   cnatDiam_int,
+  ~ substrate.type | timepoint
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate,
+  method = "dunnett",
+  ref = "NHL",
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+
+#dunnetts - avg by timepoint
+
+emm_substrate <- emmeans(
+   cnatDiam_int,
+  ~  substrate.type
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate,
+  method = "dunnett",
+  ref = "NHL",
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+
+$contrasts
+ contrast  estimate     SE df t.ratio p.value
+ 1mo - 1w    -0.156 0.0793 29  -1.964  0.0592
+ 1mo - 6mo   -0.344 0.0812 29  -4.237  0.0006
+ 1w - 6mo    -0.188 0.0812 29  -2.321  0.0413
+```{r tukey age diff}
+#tukey age
+#BH
+emmeans(
+  cnatDiam_add,
+  pairwise ~ timepoint,
+  adjust = "BH"
+)
+
+
+```
+
+#VOLUME RESULTS
+
+with type II error correction:
+
+Response: log(volume)
+                         Sum Sq Df F value    Pr(>F)    
+timepoint                71.453  2 60.3418 7.074e-10 ***
+substrate.type            5.237  3  2.9485   0.05408 .  
+timepoint:substrate.type  8.174  6  2.3009   0.06920 .  
+
+```{r vol}
+
+#checking for normality
+qq <- car::qqPlot(cnatDf$volume, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(log(cnatDf$volume), ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(cnatDf, aes(x=timepoint, y=volume, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+plotSub <- ggplot(cnatDf, aes(x=timepoint, y=volume)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1)
+plotSub
+#seems like there might be some substrate effects, so lets compare models
+
+
+cnatVol_add <- aov(log(volume) ~ substrate.type + timepoint,
+           data = cnatDf)
+summary(cnatVol_add)
+
+cnatVol_int <- aov(log(volume) ~ timepoint * substrate.type,
+           data = cnatDf)
+summary(cnatVol_int)
+```
+post hoc 1: 
+timepoint = 1mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL    -1.92312 0.628 23  -3.061  0.0153
+ (NHL-MgSrQ) - NHL  0.20016 0.628 23   0.319  0.9588
+ (NHL-Sr) - NHL    -0.89464 0.628 23  -1.424  0.3716
+
+timepoint = 1w:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL    -0.10172 0.628 23  -0.162  0.9898
+ (NHL-MgSrQ) - NHL -0.87332 0.628 23  -1.390  0.3897
+ (NHL-Sr) - NHL    -0.99478 0.628 23  -1.583  0.2934
+
+timepoint = 6mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL    -0.00463 0.702 23  -0.007  1.0000
+ (NHL-MgSrQ) - NHL  0.82471 0.628 23   1.313  0.4325
+ (NHL-Sr) - NHL    -0.45623 0.628 23  -0.726  0.7856
+ 
+ post hoc 2:
+  contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.6765 0.378 23  -1.792  0.2088
+ (NHL-MgSrQ) - NHL   0.0505 0.363 23   0.139  0.9925
+ (NHL-Sr) - NHL     -0.7819 0.363 23  -2.156  0.1072
+ 
+```{r - dunnetts}
+
+#dunnets - sectioned by timepoint
+emm_substrate <- emmeans(
+  cnatVol_int,
+  ~ substrate.type | timepoint
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL",
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+
+#dunnets - avg by timepoint
+emm_substrate <- emmeans(
+  cnatVol_int,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL",
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+
+#timepoint post hoc
+emmeans(
+  cnatVol_add,
+  pairwise ~ timepoint,
+  adjust = "BH"
+)
+
+```
+
+$contrasts
+ contrast  estimate    SE df t.ratio p.value
+ 1mo - 1w     0.899 0.354 29   2.540  0.0167
+ 1mo - 6mo   -2.531 0.363 29  -6.978 <0.0001
+ 1w - 6mo    -3.430 0.363 29  -9.457 <0.0001
+```{r - tukey age diff}
+#tukey - age diffs
+emmeans(
+  cnatVol_add,
+  pairwise ~ timepoint,
+  adjust = "BH"
+)
+
+```
+
+#VOL/AREA RESULTS - you all did not write about vol/area explicitly (correct me if im wrong?) and so i did not include this in the correction. We used vol/area in the PC1 analysis, but i dont see it mentioned in the results section pertaining to me.
+
+Response: log(area.volume)
+                          Sum Sq Df F value    Pr(>F)    
+timepoint                11.4387  2 46.2112 8.781e-09 ***
+substrate.type            0.2163  3  0.5825    0.6325    
+timepoint:substrate.type  1.4695  6  1.9788    0.1105    
+Residuals                 2.8466 23                      
+---
+
+```{r - vol/area}
+#AREA/VOL
+
+#checking for normality
+qq <- car::qqPlot(cnatDf$area.volume, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(log(cnatDf$area.volume), ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(cnatDf, aes(x=timepoint, y=area.volume, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+plotSub <- ggplot(cnatDf, aes(x=timepoint, y=area.volume)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1)
+plotSub
+#seems like there might be some substrate effects, so lets compare models
+
+cnatAreaVol_add <- aov(log(area.volume) ~ timepoint + substrate.type,
+           data = cnatDf)
+summary(cnatArea_add)
+
+cnatAreaVol_int <- aov(log(area.volume) ~ timepoint * substrate.type,
+           data = cnatDf)
+summary(cnatAreaVol_int)
+```
+
+post hoc 1:
+
+timepoint = 1mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.0260 0.188 29  -0.138  0.9926
+ (NHL-MgSrQ) - NHL  -0.1665 0.182 29  -0.915  0.6724
+ (NHL-Sr) - NHL      0.0392 0.182 29   0.215  0.9816
+
+timepoint = 1w:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.0260 0.188 29  -0.138  0.9926
+ (NHL-MgSrQ) - NHL  -0.1665 0.182 29  -0.915  0.6724
+ (NHL-Sr) - NHL      0.0392 0.182 29   0.215  0.9816
+
+timepoint = 6mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.0260 0.188 29  -0.138  0.9926
+ (NHL-MgSrQ) - NHL  -0.1665 0.182 29  -0.915  0.6724
+ (NHL-Sr) - NHL      0.0392 0.182 29   0.215  0.9816
+
+
+post hoc 2:
+
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.0260 0.188 29  -0.138  0.9926
+ (NHL-MgSrQ) - NHL  -0.1665 0.182 29  -0.915  0.6724
+ (NHL-Sr) - NHL      0.0392 0.182 29   0.215  0.9816
+ 
+```{r dunnetts}
+
+#dunnets - sectioned bye timepoint
+emm_substrate <- emmeans(
+  cnatAreaVol_add,
+  ~ substrate.type | timepoint
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL",
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+
+#dunnets - averaged across timepoint
+emm_substrate <- emmeans(
+  cnatAreaVol_add,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL",
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+
+```
+
+$contrasts
+ contrast  estimate    SE df t.ratio p.value
+ 1mo - 1w    -0.234 0.144 23  -1.627  0.1174
+ 1mo - 6mo    1.103 0.148 23   7.452 <0.0001
+ 1w - 6mo     1.337 0.148 23   9.030 <0.0001
+```{r - tukey age diff}
+emmeans(
+  cnatAreaVol_int,
+  pairwise ~ timepoint,
+  adjust = "BH"
+)
+```
+
+#HEIGHT RESULTS
+
+               Df Sum Sq Mean Sq F value   Pr(>F)    
+timepoint       2  7.653   3.826  24.775 5.31e-07 ***
+substrate.type  3  0.563   0.188   1.215    0.322    
+
+
+```{r - height}
+
+#HEIGHT
+
+#checking for normality
+qq <- car::qqPlot(cnatDf$coralliteHeight, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(log(cnatDf$coralliteHeight), ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(cnatDf, aes(x=timepoint, y=coralliteHeight, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+plotSub <- ggplot(cnatDf, aes(x=substrate.type, y=coralliteHeight)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1)
+plotSub
+#seems like there might be some substrate effects, so lets compare models
+
+cnatHeight_add <- aov(log(coralliteHeight) ~ timepoint + substrate.type,
+           data = cnatDf)
+summary(cnatHeight_add)
+
+cnatHeight_int <- aov(log(coralliteHeight) ~ timepoint * substrate.type,
+           data = cnatDf)
+summary(cnatHeight_aov)
+```
+post hoc 1:
+timepoint = 1mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.2227 0.339 23  -0.657  0.8229
+ (NHL-MgSrQ) - NHL  -0.0225 0.339 23  -0.066  0.9983
+ (NHL-Sr) - NHL      0.2162 0.339 23   0.638  0.8328
+
+timepoint = 1w:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.4340 0.339 23  -1.280  0.4511
+ (NHL-MgSrQ) - NHL  -0.0726 0.339 23  -0.214  0.9818
+ (NHL-Sr) - NHL     -0.2851 0.339 23  -0.841  0.7190
+
+timepoint = 6mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.1468 0.379 23  -0.387  0.9385
+ (NHL-MgSrQ) - NHL   0.3151 0.339 23   0.929  0.6654
+ (NHL-Sr) - NHL     -0.1760 0.339 23  -0.519  0.8886
+ 
+ post hoc 2:
+  contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     -0.2678 0.204 23  -1.315  0.4314
+ (NHL-MgSrQ) - NHL   0.0733 0.196 23   0.375  0.9425
+ (NHL-Sr) - NHL     -0.0817 0.196 23  -0.417  0.9284
+ 
+```{r dunnetts}
+
+#dunnets - section by timepoint
+emm_substrate <- emmeans(
+  cnatHeight_int,
+  ~ substrate.type | timepoint
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL",
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+
+#dunnets - average across timepointds
+emm_substrate <- emmeans(
+  cnatHeight_int,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL",
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+$contrasts
+ contrast  estimate    SE df t.ratio p.value
+ 1mo - 1w     0.242 0.170 23   1.428  0.1667
+ 1mo - 6mo   -0.850 0.175 23  -4.863 <0.0001
+ 1w - 6mo    -1.092 0.175 23  -6.248 <0.0001
+```{r tukey age diff}
+#tukey age
+emmeans(
+  cnatHeight_int,
+  pairwise ~  timepoint,
+  adjust = "BH"
+)
+
+
+```
+
+#SEPTA THICK
+
+               Df Sum Sq Mean Sq F value   Pr(>F)    
+timepoint       2 1.2382  0.6191   10.12 0.000464 ***
+substrate.type  3 0.3194  0.1065    1.74 0.180690    
+
+
+```{r - septa thickness}
+
+#thick
+
+#checking for normality
+qq <- car::qqPlot(cnatDf$septathickness, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(log(cnatDf$septathickness), ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(cnatDf, aes(x=timepoint, y=septathickness, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+plotSub <- ggplot(cnatDf, aes(x=timepoint, y=septathickness)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1)
+plotSub
+#seems like there might be some substrate effects, so lets compare models
+
+cnatThick_add <- aov(log(septathickness) ~ timepoint + substrate.type,
+           data = cnatDf)
+summary(cnatThick_add)
+
+
+cnatThick_int <- aov(log(septathickness) ~ timepoint * substrate.type,
+           data = cnatDf)
+summary(cnatThick_int)
+```
+post hoc 1: 
+timepoint = 1mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL    -0.24845 0.190 23  -1.311  0.4335
+ (NHL-MgSrQ) - NHL  0.29451 0.190 23   1.554  0.3069
+ (NHL-Sr) - NHL     0.13814 0.190 23   0.729  0.7841
+
+timepoint = 1w:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL     0.34173 0.190 23   1.803  0.2048
+ (NHL-MgSrQ) - NHL  0.21898 0.190 23   1.155  0.5254
+ (NHL-Sr) - NHL     0.01245 0.190 23   0.066  0.9984
+
+timepoint = 6mo:
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL    -0.00461 0.212 23  -0.022  0.9998
+ (NHL-MgSrQ) - NHL  0.17754 0.190 23   0.937  0.6608
+ (NHL-Sr) - NHL    -0.11182 0.190 23  -0.590  0.8563
+ 
+ post hoc 2:
+ 
+ contrast          estimate    SE df t.ratio p.value
+ (NHL-Mg) - NHL      0.0296 0.114 23   0.260  0.9730
+ (NHL-MgSrQ) - NHL   0.2303 0.109 23   2.105  0.1182
+ (NHL-Sr) - NHL      0.0129 0.109 23   0.118  0.9946
+
+```{r dunnetts}
+
+#dunnetts - sectioned by age
+
+emm_substrate <- emmeans(
+   cnatThick_int,
+  ~ substrate.type | timepoint
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate,
+  method = "dunnett",
+  ref = "NHL"
+)
+
+summary(dunnett_substrate)
+
+#dunnetts - avg by age
+
+emm_substrate <- emmeans(
+   cnatThick_int,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate,
+  method = "dunnett",
+  ref = "NHL"
+)
+
+summary(dunnett_substrate)
+```
+$contrasts
+ contrast  estimate    SE df t.ratio p.value
+ 1mo - 1w     0.037 0.101 29   0.367  0.7165
+ 1mo - 6mo   -0.382 0.103 29  -3.688  0.0014
+ 1w - 6mo    -0.419 0.103 29  -4.046  0.0011
+```{r tukey age diff}
+
+#tukey age
+emmeans(
+  cnatThick_add,
+  pairwise ~  timepoint,
+  adjust = "BH"
+)
+
+
+```
+
+
+#MULTIPLE TEST P VALUE CORRECTION
+```{r - corrections for all groeth var tests}
+#but i need to correct for thew number of tests here so 
+library(car)
+
+
+pvals <- c(
+  Anova(cnatVol_add, type = 2)["timepoint","Pr(>F)"],
+  Anova(cnatVol_add, type = 2)["substrate.type","Pr(>F)"],
+
+ 
+  Anova(cnatArea_add, type = 2)["timepoint","Pr(>F)"],
+  Anova(cnatArea_add, type = 2)["substrate.type","Pr(>F)"],
+  
+  #Anova(cnatAreaVol_add, type = 2)["timepoint","Pr(>F)"],
+  #Anova(cnatAreaVol_add, type = 2)["substrate.type","Pr(>F)"],
+ 
+  Anova(cnatHeight_add, type = 2)["timepoint","Pr(>F)"],
+  Anova(cnatHeight_add, type = 2)["substrate.type","Pr(>F)"],
+ 
+  Anova(cnatThick_add, type = 2)["timepoint","Pr(>F)"],
+  Anova(cnatThick_add, type = 2)["substrate.type","Pr(>F)"],
+
+  Anova(cnatDiam_add, type = 2)["timepoint","Pr(>F)"],
+  Anova(cnatDiam_add, type = 2)["substrate.type","Pr(>F)"]
+
+)
+
+adjust <- p.adjust(pvals, method="BH")
+
+```
+
+#CORRECTING FOR ALL TESTS
+```{r - p value corrections}
+#timepoint 
+p_timepoint <- c(
+  volume    = Anova(cnatVol_add,    type = 2)["timepoint", "Pr(>F)"],
+  area      = Anova(cnatArea_add,   type = 2)["timepoint", "Pr(>F)"],
+  height    = Anova(cnatHeight_add, type = 2)["timepoint", "Pr(>F)"],
+  thickness = Anova(cnatThick_add,  type = 2)["timepoint", "Pr(>F)"],
+  diameter  = Anova(cnatDiam_add,   type = 2)["timepoint", "Pr(>F)"]
+)
+
+p_timepoint_BH <- p.adjust(p_timepoint, method = "BH")
+
+#substr
+p_substrate <- c(
+  volume    = Anova(cnatVol_add,    type = 2)["substrate.type", "Pr(>F)"],
+  area      = Anova(cnatArea_add,   type = 2)["substrate.type", "Pr(>F)"],
+  height    = Anova(cnatHeight_add, type = 2)["substrate.type", "Pr(>F)"],
+  thickness = Anova(cnatThick_add,  type = 2)["substrate.type", "Pr(>F)"],
+  diameter  = Anova(cnatDiam_add,   type = 2)["substrate.type", "Pr(>F)"]
+)
+
+p_substrate_BH <- p.adjust(p_substrate, method = "BH")
+
+# results
+LM_pvalCorrections <- data.frame(
+  variable = names(p_timepoint),
+  p_timepoint = p_timepoint,
+  p_timepoint_BH = p_timepoint_BH,
+  p_substrate = p_substrate,
+  p_substrate_BH = p_substrate_BH
+)
+
+LM_pvalCorrections
+```
+------------------------------------
+
+(2) DLAB and CNAT comparison at 6mo - see previous code files
