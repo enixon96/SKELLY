@@ -1,0 +1,608 @@
+---
+title: "SKELLY"
+output: word_document
+date: "2026-05-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loading packages}
+library(tidyverse) #most things pipey
+library(vegan) #pcoa plots
+library(purrr)
+library(broom)
+library(dplyr) #most things pipey
+library(rstatix) #dunns
+library(lme4)
+```
+
+#TEST SET 1: testing additives against NHL control substrate through time
+```{r reading in data}
+setwd("/Users/enixon96/Desktop/SKELLY_REMcodes")
+skelly_EDS <- read.csv("Data_EDS.csv")%>%
+  mutate(timepoint = case_when(time.point == "1 week" ~ "1w",
+                               time.point == "1 month" ~ "1mo",
+                               time.point == "6 months" ~ "6mo",
+                               TRUE ~ time.point),
+         .keep = "unused")%>%
+  filter(species == "Cnat" & substrate.type != "Ceramic")
+
+skelly_EDSlog <- skelly_EDS%>%
+  mutate(MgLog = log(Mg, base = 10),
+         SrLog = log(Sr, base= 10),
+         SiLog = log(Si+1, base = 10))
+```
+
+ok so this df is not set up how i would typically set up a df but i think it will work. basically, as i understand it, each row is a sample and we have substrate type and then the ion values for mg, sr, and si.
+
+#MG
+```{r mg analysis}
+
+#mg ions
+
+#checking for normality
+qq <- car::qqPlot(skelly_EDSlog$Mg, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(skelly_EDSlog$MgLog, ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(skelly_EDSlog, aes(x=timepoint, y=Mg, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+plotSub <- ggplot(skelly_EDSlog, aes(x=timepoint, y=Mg)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1)
+plotSub
+
+#seems like there might be some substrate effects, so lets compare models
+
+cnatEDSmg_add <- aov(MgLog ~ timepoint + substrate.type,
+           data = skelly_EDSlog)
+summary(cnatEDSmg_add)
+
+cnatEDSmg_int <- aov(log(Mg) ~ timepoint * substrate.type,
+           data = skelly_EDSlog)
+summary(cnatEDSmg_int)
+```
+
+```{r dunnetts substrate type diffs }
+#post hoc 1
+
+#dunnets - sectioned by timepoint substrate type
+emm_substrate <- emmeans(
+  cnatEDSmg_int,
+  ~ substrate.type | timepoint 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+
+#posthoc 2
+
+#dunnets - avg by timepoint substrate type
+emm_substrate <- emmeans(
+  cnatEDSmg_int,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+
+```{r tukey - age diffs}
+#tukey - age diffs
+emmeans(
+  cnatEDSmg_add,
+  pairwise ~ timepoint,
+  adjust = "BH"
+)
+
+```
+
+#SR
+```{r sr analysis}
+
+#mg ions
+
+#checking for normality
+qq <- car::qqPlot(skelly_EDSlog$Sr, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(skelly_EDSlog$SrLog, ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(skelly_EDSlog, aes(x=timepoint, y=Sr, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+plotSub <- ggplot(skelly_EDSlog, aes(x=timepoint, y=Sr)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1)
+plotSub
+
+#seems like there might be some substrate effects, so lets compare models
+
+cnatEDSsr_add <- aov(SrLog ~ timepoint + substrate.type,
+           data = skelly_EDSlog)
+summary(cnatEDSsr_add)
+
+cnatEDSsr_int <- aov(SrLog ~ timepoint * substrate.type,
+           data = skelly_EDSlog)
+summary(cnatEDSsr_int)
+```
+```{r dunnetts substrate type diffs }
+#post hoc 1
+
+#dunnets - sectioned by timepoint substrate type
+emm_substrate <- emmeans(
+  cnatEDSsr_int,
+  ~ substrate.type | timepoint 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+
+#posthoc 2
+
+#dunnets - avg by timepoint substrate type
+emm_substrate <- emmeans(
+  cnatEDSsr_int,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+
+```{r tukey - age diffs}
+#tukey - age diffs
+emmeans(
+  cnatEDSsr_add,
+  pairwise ~ timepoint,
+  adjust = "BH"
+)
+
+```
+
+#SI
+```{r si analysis}
+
+#si ions
+
+#checking for normality
+qq <- car::qqPlot(skelly_EDSlog$Si, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(skelly_EDSlog$SiLog, ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(skelly_EDSlog, aes(x=timepoint, y=Si, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+plotSub <- ggplot(skelly_EDSlog, aes(x=timepoint, y=Si)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1)
+plotSub
+
+#seems like there might be some substrate effects, so lets compare models
+
+cnatEDSsr_add <- aov(SiLog ~ timepoint + substrate.type,
+           data = skelly_EDSlog)
+summary(cnatEDSsr_add)
+
+cnatEDSsr_int <- aov(SiLog ~ timepoint * substrate.type,
+           data = skelly_EDSlog)
+summary(cnatEDSsr_int)
+```
+```{r dunnetts substrate type diffs }
+#post hoc 1
+
+#dunnets - sectioned by timepoint substrate type
+emm_substrate <- emmeans(
+  cnatEDSsr_int,
+  ~ substrate.type | timepoint 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+
+#posthoc 2
+
+#dunnets - avg by timepoint substrate type
+emm_substrate <- emmeans(
+  cnatEDSsr_int,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "NHL", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+
+```{r tukey - age diffs}
+#tukey - age diffs
+emmeans(
+  cnatEDSsr_add,
+  pairwise ~ timepoint,
+  adjust = "BH"
+)
+
+```
+
+
+
+
+#TEST SET 2: testing ion ratio values at 6mo vs ceramic (ceramic only sampled at 6mo)
+```{r reading in data}
+setwd("/Users/enixon96/Desktop/SKELLY_REMcodes")
+
+skelly_EDSceramic <- read.csv("Data_EDS_ceramic.csv")%>%
+  mutate(timepoint = case_when(time.point == "1 week" ~ "1w",
+                               time.point == "1 month" ~ "1mo",
+                               time.point == "6 months" ~ "6mo",
+                               TRUE ~ time.point),
+         .keep = "unused")
+
+skelly_EDSceramicLog <- skelly_EDSceramic%>%
+  filter(timepoint == "6mo")%>%
+   mutate(MgLog = log(Mg, base = 10),
+         SrLog = log(Sr, base= 10),
+         SiLog = log(Si+1, base = 10))
+  
+
+```
+
+#MG
+```{r mg analysis}
+
+#mg ions
+
+#checking for normality
+qq <- car::qqPlot(skelly_EDSceramicLog$Mg, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(skelly_EDSceramicLog$MgLog, ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(skelly_EDSceramicLog, aes(x=timepoint, y=Mg, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+#seems like there might be some substrate effects, so lets compare models
+
+cnatEDS_mgCer <- aov(MgLog ~ substrate.type,
+           data = skelly_EDSceramicLog)
+summary(cnatEDS_mgCer)
+
+```
+```{r dunnetts substrate type diffs }
+
+
+#dunnets - substrate type
+emm_substrate <- emmeans(
+  cnatEDS_mgCer,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "ceramic", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+```{r tukey - substrate type diffs}
+#tukey - age diffs
+emmeans(
+  cnatEDS_mgCer,
+  pairwise ~ substrate.type,
+  adjust = "BH"
+)
+
+```
+
+#SR
+```{r sr analysis}
+
+#mg ions
+
+#checking for normality
+qq <- car::qqPlot(skelly_EDSceramicLog$Sr, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(skelly_EDSceramicLog$SrLog, ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(skelly_EDSceramicLog, aes(x=timepoint, y=Sr, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+#seems like there might be some substrate effects, so lets compare models
+
+cnatEDS_srCer <- aov(SrLog ~ substrate.type,
+           data = skelly_EDSceramicLog)
+summary(cnatEDS_srCer)
+
+```
+```{r dunnetts substrate type diffs }
+
+
+#dunnets - substrate type
+emm_substrate <- emmeans(
+  cnatEDS_srCer,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "ceramic", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+```{r tukey - substrate type diffs}
+#tukey - age diffs
+emmeans(
+  cnatEDS_srCer,
+  pairwise ~ substrate.type,
+  adjust = "BH"
+)
+
+```
+
+#SI
+```{r si analysis}
+
+#mg ions
+
+#checking for normality
+qq <- car::qqPlot(skelly_EDSceramicLog$Si, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(skelly_EDSceramicLog$SiLog, ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(skelly_EDSceramicLog, aes(x=timepoint, y=Si, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+#seems like there might be some substrate effects, so lets compare models
+
+cnatEDS_siCer <- aov(SiLog ~ substrate.type,
+           data = skelly_EDSceramicLog)
+summary(cnatEDS_siCer)
+
+```
+```{r dunnetts substrate type diffs }
+
+
+#dunnets - substrate type
+emm_substrate <- emmeans(
+  cnatEDS_siCer,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "ceramic", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+```{r tukey - substrate type diffs}
+#tukey - age diffs
+emmeans(
+  cnatEDS_siCer,
+  pairwise ~ substrate.type,
+  adjust = "BH"
+)
+
+```
+
+
+
+
+
+
+
+
+#TEST SET 3: porosity
+```{r reading in data}
+setwd("/Users/enixon96/Desktop/SKELLY_REMcodes")
+
+skelly_porosity <- read.csv("Data_Porosity new.csv")%>%
+  mutate(timepoint = case_when(time.point == "6 months" ~ "6mo",
+                               TRUE ~ time.point),
+         .keep = "unused")%>%
+  filter(species == "Cnat" & timepoint == "6mo")%>%
+  #removing NHL-Mg bc only data for 1 sample
+  filter(substrate.type != "NHL-Mg")
+
+
+skelly_porosityLog <- skelly_porosity%>%
+  mutate(porosityLog = log(porosity, base = 10),
+         coreLog = log(core, base= 10),
+         interfaceLog = log(interface, base = 10))
+
+```
+
+#porosity
+```{r porosity analysis}
+
+#porosity
+
+#checking for normality
+qq <- car::qqPlot(skelly_porosityLog$porosity, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(skelly_porosityLog$porosityLog, ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(skelly_porosityLog, aes(x=timepoint, y=porosity, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+#seems like there might be some substrate effects, so lets compare models
+
+cnatPorosity <- aov(porosityLog ~ substrate.type,
+           data = skelly_porosityLog)
+summary(cnatPorosity)
+
+```
+```{r dunnetts substrate type diffs }
+
+
+#dunnets - substrate type
+emm_substrate <- emmeans(
+  cnatPorosity,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "Ceramic", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+```{r tukey - substrate type diffs}
+#tukey - age diffs
+emmeans(
+  cnatPorosity,
+  pairwise ~ substrate.type,
+  adjust = "BH"
+)
+
+```
+
+#core
+```{r core porosity analysis}
+
+#porosity
+
+#checking for normality
+qq <- car::qqPlot(skelly_porosityLog$core, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(skelly_porosityLog$coreLog, ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(skelly_porosityLog, aes(x=timepoint, y=core, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+#seems like there might be some substrate effects, so lets compare models
+
+cnatPorosity_core <- aov(coreLog ~ substrate.type,
+           data = skelly_porosityLog)
+summary(cnatPorosity_core)
+
+```
+```{r dunnetts substrate type diffs }
+
+
+#dunnets - substrate type
+emm_substrate <- emmeans(
+  cnatPorosity_core,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "Ceramic", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+```{r tukey - substrate type diffs}
+#tukey - age diffs
+emmeans(
+  cnatPorosity_core,
+  pairwise ~ substrate.type,
+  adjust = "BH"
+)
+
+```
+
+#interface
+```{r interface porosity analysis}
+
+#porosity
+
+#checking for normality
+qq <- car::qqPlot(skelly_porosityLog$interface, ylab = "sum", xlab = "normal quant")
+qq <- car::qqPlot(skelly_porosityLog$interfaceLog, ylab = "sum", xlab = "normal quant")
+
+plotTimeSub <- ggplot(skelly_porosityLog, aes(x=timepoint, y=interface, color = substrate.type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.05)
+plotTimeSub
+
+#seems like there might be some substrate effects, so lets compare models
+
+cnatPorosity_interface <- aov(interfaceLog ~ substrate.type,
+           data = skelly_porosityLog)
+summary(cnatPorosity_interface)
+
+```
+```{r dunnetts substrate type diffs }
+
+
+#dunnets - substrate type
+emm_substrate <- emmeans(
+  cnatPorosity_interface,
+  ~ substrate.type 
+)
+
+dunnett_substrate <- contrast(
+  emm_substrate ,
+  method = "dunnett",
+  ref = "Ceramic", 
+  adjust = "dunnett"
+)
+
+summary(dunnett_substrate)
+```
+```{r tukey - substrate type diffs}
+#tukey - age diffs
+emmeans(
+  cnatPorosity_interface,
+  pairwise ~ substrate.type,
+  adjust = "BH"
+)
+
+```
